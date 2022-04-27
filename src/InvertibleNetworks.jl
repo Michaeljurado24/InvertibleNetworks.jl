@@ -20,7 +20,6 @@ import CUDA: CuArray
 
 export clear_grad!, glorot_uniform
 
-
 # Getters for DenseConvDims fields
 # (need to redefine here as they are not public methods in NNlib)
 input_size(c::DenseConvDims) = c.I
@@ -58,6 +57,7 @@ include("layers/invertible_layer_conv1x1.jl")
 include("layers/invertible_layer_basic.jl")
 include("layers/invertible_layer_irim.jl")
 include("layers/invertible_layer_glow.jl")
+include("layers/invertible_layer_glow_cond.jl")
 include("layers/invertible_layer_hyperbolic.jl")
 include("layers/invertible_layer_hint.jl")
 

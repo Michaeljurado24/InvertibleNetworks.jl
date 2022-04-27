@@ -79,7 +79,7 @@ end
 CouplingLayerGlowCond(C::Conv1x1, RB::FluxBlock; logdet=false, activation::ActivationFunction=SigmoidLayer()) = CouplingLayerGlow(C, RB, logdet, activation)
 
 # Constructor from input dimensions
-function CouplingLayerGlowCond(n_in::Int64, n_hidden::Int64; c_in::Int64, k1=3, k2=1, p1=1, p2=0, s1=1, s2=1, logdet=false, activation::ActivationFunction=SigmoidLayer(), ndims=2)
+function CouplingLayerGlowCond(n_in::Int64, n_hidden::Int64, c_in::Int64; k1=3, k2=1, p1=1, p2=0, s1=1, s2=1, logdet=false, activation::ActivationFunction=SigmoidLayer(), ndims=2)
 
     # 1x1 Convolution and residual block for invertible layer
     if Int(n_in/2) != c_in
@@ -144,7 +144,7 @@ function backward(ΔY::AbstractArray{T, 4}, Y::AbstractArray{T, 4}, C::AbstractA
     # Recompute forward state
     k = Int(L.C.k/2)
     X, X1, X2_C, S = inverse(Y, C, L; save=true)
-    X2, C = tensor_split((ΔY))
+    X2, C = tensor_split((X2_C))
 
     # Backpropagate residual
     #ΔY1, ΔY2 = tensor_split(ΔY)
@@ -154,11 +154,10 @@ function backward(ΔY::AbstractArray{T, 4}, Y::AbstractArray{T, 4}, C::AbstractA
     if L.logdet
         set_grad ? (ΔS -= glow_logdet_backward(S)) : (ΔS_ = glow_logdet_backward(S))
     end
-
     ΔX1 = ΔY1 .* S
     if set_grad
         ΔX2_C = L.RB.backward(cat(L.activation.backward(ΔS, S), ΔT; dims=3), X2_C)
-        ΔX2, ΔC = tensor_split(ΔX2_C)
+        ΔX2, ΔC  = tensor_split(ΔX2_C)
         ΔX2 += ΔY2
     else
         ΔX2, Δθrb = L.RB.backward(cat(L.activation.backward(ΔS, S), ΔT; dims=3), X2; set_grad=set_grad)

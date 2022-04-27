@@ -1,8 +1,9 @@
 using MLDatasets
-using InvertibleNetworks
 using Flux
+
 using Flux.Optimise: Optimiser, ExpDecay, update!, ADAM
 using Xsum
+using InvertibleNetworks
 
 # load in training data
 train_x, train_y = MNIST.traindata()
@@ -11,7 +12,7 @@ num_digit = 1
 range_dig = 0:num_digit-1
 
 # Use a subset of total training data
-batch_size = 1
+batch_size = 10
 num_samples = batch_size*45
 
 
@@ -30,9 +31,9 @@ X_test   = Float32.(reshape(test_x, size(test_x)[1], size(test_x)[2], 1, size(te
 X_test = permutedims(X_test, [2, 1, 3, 4])
 
 
-x_batch = X_test[:, :, :, 1:batch_size]
-c = deepcopy(x_batch) # set the condition to x_batch just for testing
-x_batch = repeat(x_batch, inner = (1, 1, 2, 1))
+
+
+
 
 k1 = 3; p1 = 1; s1 = 1
 k2 = 1; p2 = 0; s2 = 1
@@ -41,38 +42,61 @@ k2 = 1; p2 = 0; s2 = 1
 n_in = 2
 c_in = 1
 n_hidden = 64
-layer = CouplingLayerGlowCond(n_in, n_hidden, c_in, k1=k1, k2=k2, p1=p1, p2=p2, s1=s1, s2=s2, logdet=true)
+Δ = 1e-4
+
+x_batch = X_test[:, :, :, 1:batch_size]
+c_batch =  repeat(deepcopy(x_batch), inner = (1, 1, c_in, 1)) .* 100
+x_batch = repeat(deepcopy(x_batch), inner = (1, 1, n_in, 1))
+
+layer2 = CouplingLayerGlowCond(n_in, n_hidden, c_in; k1=k1, k2=k2, p1=p1, p2=p2, s1=s1, s2=s2, logdet=true)
+Zx, _ = layer2.forward(x_batch, c_batch)  # apply forward pass
+x_batch_reverse = layer2.inverse(Zx, c_batch)
+L = xsum(Zx .* Zx)/batch_size # your loss is equal to the sum of squared of the outputs divided by batch size
+ΔY = 2 * Zx/batch_size # gradient of loss
+ΔX, X, ΔC  = layer2.backward(ΔY, Zx, c_batch)
 
 
-# Zx_2, _ = layer2.forward(x_batch)  # apply forward pass
-# L_2 = xsum(Zx_2 .* Zx_2)/batch_size # your loss is equal to the sum of the output of the forward pass for testing reasons
-# ΔY_2 = 2 * Zx_2/batch_size # gradient of loss
-# ΔX_2, X_2 = layer2.backward(ΔY_2, Zx_2)
+print("Testing that the linear gradient approximations are close to the calculated gradient for the conditon")
+for x =1:size(c_batch)[1]
+    for y =1:size(c_batch)[2]
+        for z = 1:size(c_batch)[3]
+            c_batch_copy = deepcopy(c_batch)
+            c_batch_copy[x,y,z,:] += ones(Float32, batch_size) .*Δ 
+            Zx_new  = layer2.forward(x_batch, c_batch_copy)[1]
+            L_2 = xsum(Zx_new .* Zx_new)/batch_size
 
-# for x =1:size(x_batch)[1]
-#     for y =1:size(x_batch)[2]
-#         for z = 1:size(x_batch)[3]
-#             x_copy = deepcopy(x_batch)
-#             x_copy[x,y,z,:] += ones(Float32, batch_size) * 1e-4
-#             Zx_new_2  = layer2.forward(x_copy)[1]
-#             L_new_2 = xsum(Zx_new_2 .* Zx_new_2)/batch_size
+            c_batch_copy = deepcopy(c_batch)
+            c_batch_copy[x,y,z,:] -= ones(Float32, batch_size) .*Δ 
+            Zx_new  = layer2.forward(x_batch, c_batch_copy)[1]
+            L_3 = xsum(Zx_new .* Zx_new)/batch_size
 
-#             x_copy = deepcopy(x_batch)
-#             x_copy[x,y,z,:] -= ones(Float32, batch_size) * 1e-4
-#             Zx_new_3  = layer2.forward(x_copy)[1]
-#             L_new_3 = xsum(Zx_new_3 .* Zx_new_3)/batch_size
 
-#             lin_deriv_2 = (L_new_2 - L_new_3) / (2e-4)
-#             if abs(L_new_2 - L_2) > 1e-7
+            lin_deriv = (L_2 - L_3) / (2 * Δ)
+            ref_value = xsum(ΔC[x,y,z,:])
 
-#                 ref_value = xsum(ΔX_2[x,y,z,:])
-#                 println(lin_deriv_2)
-#                 println(ref_value)
-#                 println("-----------")                
-#                 if !isapprox(lin_deriv_2, ref_value, atol=.5)
-#                     throw(error())
-#                 end
-#             end
-#         end
-#     end
-# end
+            if abs(ref_value) > .1
+
+                ref_value = xsum(ΔC[x,y,z,:])
+                println(lin_deriv)
+                println(ref_value)
+                println("-----------")                
+                if !isapprox(lin_deriv, ref_value, atol=1)
+                    throw(error())
+                end
+            end
+        end
+    end
+end
+
+println("L should decrease consistently")
+for i=1:100
+    global c_batch
+    global x_batch
+    Zx, _ = layer2.forward(x_batch, c_batch)  # apply forward pass
+    L = xsum(Zx .* Zx)/batch_size # your loss is equal to the sum of the output of the forward pass for testing reasons
+    println(L)
+    ΔY = 2 * Zx/batch_size # gradient of loss
+    ΔX, X, ΔC  = layer2.backward(ΔY, Zx, c_batch)
+    c_batch = c_batch -  ΔC * Float32(.1)
+
+end
