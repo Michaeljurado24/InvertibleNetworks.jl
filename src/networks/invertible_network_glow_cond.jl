@@ -2,8 +2,7 @@
 # Includes 1x1 convolution and residual block
 # Author: Philipp Witte, pwitte3@gatech.edu
 # Date: February 2020
-
-# export NetworkGlow, NetworkGlow3D
+export NetworkGlowCond
 
 """
     G = NetworkGlow(n_in, n_hidden, L, K; k1=3, k2=1, p1=1, p2=0, s1=1, s2=1)
@@ -59,12 +58,14 @@
 
  See also: [`ActNorm`](@ref), [`CouplingLayerGlow!`](@ref), [`get_params`](@ref), [`clear_grad!`](@ref)
 """
-struct NetworkGlow <: InvertibleNetwork
+struct NetworkGlowCond <: InvertibleNetwork
     AN::AbstractArray{ActNorm, 2}
-    CL::AbstractArray{CouplingLayerGlow, 2}
+    CL::AbstractArray{CouplingLayerGlowCond, 2}
+    CP::AbstractArray{Flux.Conv, 2}
     Z_dims::Union{Array{Array, 1}, Nothing}
     L::Int64
     K::Int64
+    conditioning_network::Chain
     squeezer::Squeezer
     split_scales::Bool
 end
@@ -72,10 +73,11 @@ end
 @Flux.functor NetworkGlow
 
 # Constructor
-function NetworkGlow(n_in, n_hidden, L, K; split_scales=false, k1=3, k2=1, p1=1, p2=0, s1=1, s2=1, ndims=2, squeezer::Squeezer=ShuffleLayer(), activation::ActivationFunction=SigmoidLayer())
+function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scales=false, k1=3, k2=1, p1=1, p2=0, s1=1, s2=1, ndims=2, squeezer::Squeezer=ShuffleLayer(), activation::ActivationFunction=SigmoidLayer())
     AN = Array{ActNorm}(undef, L, K)    # activation normalization
-    CL = Array{CouplingLayerGlow}(undef, L, K)  # coupling layers w/ 1x1 convolution and residual block
- 
+    CL = Array{CouplingLayerGlowCond}(undef, L, K)  # coupling layers w/ 1x1 convolution and residual block
+    CP = Array{Flux.Conv}(undef, L, K) # conditioning pyramid
+    c_in = outdims(conditioning_network, (100, 100, 1, 1))[2]
     if split_scales
         Z_dims = fill!(Array{Array}(undef, L-1), [1,1]) #fill in with dummy values so that |> gpu accepts it   # save dimensions for inverse/backward pass
         channel_factor = 4
@@ -88,12 +90,14 @@ function NetworkGlow(n_in, n_hidden, L, K; split_scales=false, k1=3, k2=1, p1=1,
         n_in *= channel_factor # squeeze if split_scales is turned on
         for j=1:K
             AN[i, j] = ActNorm(n_in; logdet=true)
-            CL[i, j] = CouplingLayerGlow(n_in, n_hidden; k1=k1, k2=k2, p1=p1, p2=p2, s1=s1, s2=s2, logdet=true, activation=activation, ndims=ndims)
+            CP[i, j] = Flux.Conv((3, 3), c_in => Int64(n_in/2))
+            CL[i, j] = CouplingLayerGlowCond(n_in, n_hidden, Int(n_in/2); k1=k1, k2=k2, p1=p1, p2=p2, s1=s1, s2=s2, logdet=true, activation=activation, ndims=ndims)
         end
         (i < L && split_scales) && (n_in = Int64(n_in/2)) # split
+        c_in = Int64(n_in /2)
     end
 
-    return NetworkGlow(AN, CL, Z_dims, L, K, squeezer, split_scales)
+    return NetworkGlowCond(AN, CL, CP, Z_dims, L, K, conditioning_network, squeezer, split_scales)
 end
 
 NetworkGlow3D(args; kw...) = NetworkGlow(args...; kw..., ndims=3)
@@ -101,11 +105,14 @@ NetworkGlow3D(args; kw...) = NetworkGlow(args...; kw..., ndims=3)
 # Forward pass and compute logdet
 function forward(X::AbstractArray{T, N}, G::NetworkGlow) where {T, N}
     G.split_scales && (Z_save = array_of_array(X, G.L-1))
-
+    println(size(X));
     logdet = 0
     for i=1:G.L
+        println(size(X));          
         (G.split_scales) && (X = G.squeezer.forward(X))
-        for j=1:G.K            
+        println(size(X));          
+        for j=1:G.K  
+
             X, logdet1 = G.AN[i, j].forward(X)
             X, logdet2 = G.CL[i, j].forward(X)
             logdet += (logdet1 + logdet2)
@@ -115,6 +122,7 @@ function forward(X::AbstractArray{T, N}, G::NetworkGlow) where {T, N}
             Z_save[i] = Z
             G.Z_dims[i] = collect(size(Z))
         end
+        println("----------------")
     end
     G.split_scales && (X = cat_states(Z_save, X))
     return X, logdet
@@ -145,7 +153,7 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, G::NetworkGl
         ΔZ_save, ΔX = split_states(ΔX, G.Z_dims)
         Z_save, X = split_states(X, G.Z_dims)
     end
-    print(set_grad)
+
     if ~set_grad
         Δθ = Array{Parameter, 1}(undef, 10*G.L*G.K)
         ∇logdet = Array{Parameter, 1}(undef, 10*G.L*G.K)
