@@ -45,14 +45,21 @@ n_hidden = 64
 Δ = 1e-4
 
 x_batch = X_test[:, :, :, 1:batch_size]
-c_batch =  repeat(deepcopy(x_batch), inner = (1, 1, c_in, 1)) .* 200
+c_batch =  repeat(deepcopy(x_batch), inner = (1, 1, c_in, 1)) * 20
 x_batch = repeat(deepcopy(x_batch), inner = (1, 1, n_in, 1))
 
+
+
 layer2 = CouplingLayerGlowCond(n_in, n_hidden, c_in; k1=k1, k2=k2, p1=p1, p2=p2, s1=s1, s2=s2, logdet=true)
+
+println("Testing reverse function")
 Zx, _ = layer2.forward(x_batch, c_batch)  # apply forward pass
 x_batch_reverse = layer2.inverse(Zx, c_batch)
-println(abs.(x_batch_reverse[:] .- x_batch[:]))
+println(isapprox(x_batch_reverse[:],x_batch[:], atol=1e-3))  # use large atol due to scaling input size by 200
 
+print("Testing that the linear gradient approximations are close to the calculated gradient for the conditon")
+Zx, _ = layer2.forward(x_batch, c_batch)  # apply forward pass
+x_batch_reverse = layer2.inverse(Zx, c_batch)
 L = xsum(Zx .* Zx)/batch_size # your loss is equal to the sum of squared of the outputs divided by batch size
 ΔY = 2 * Zx/batch_size # gradient of loss
 ΔX, X, ΔC  = layer2.backward(ΔY, Zx, c_batch)
@@ -76,13 +83,13 @@ for x =1:size(c_batch)[1]
             lin_deriv = (L_2 - L_3) / (2 * Δ)
             ref_value = xsum(ΔC[x,y,z,:])
 
-            if abs(ref_value) > 1
+            if abs(ref_value) > .1
 
                 ref_value = xsum(ΔC[x,y,z,:])
                 println(lin_deriv)
                 println(ref_value)
                 println("-----------")                
-                if !isapprox(lin_deriv, ref_value, atol=1)
+                if !isapprox(lin_deriv, ref_value, atol=.5)
                     throw(error())
                 end
             end

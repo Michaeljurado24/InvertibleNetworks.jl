@@ -106,9 +106,8 @@ function forward(X::AbstractArray{T, 4}, C::AbstractArray{T, 4}, L::CouplingLaye
 
     Y2 = copy(X2)
     X2_C = cat(X2, C, dims = (3))  # concatenate along channel length
-    #println(size(X2_C))
+
     logS_T = L.RB.forward(X2_C)
-    #println(size(logS_T))
     Sm = L.activation.forward(logS_T[:,:,1:k,:])
     Tm = logS_T[:, :, k+1:end, :]
     Y1 = Sm.*X1 + Tm
@@ -140,6 +139,9 @@ end
 
 # Backward pass: Input (ΔY, Y, C), Output (ΔX, X, ΔC)
 function backward(ΔY::AbstractArray{T, 4}, Y::AbstractArray{T, 4}, C::AbstractArray{T, 4}, L::CouplingLayerGlowCond; set_grad::Bool=true) where T
+    if set_grad == false
+        throw(error())
+    end
 
     # Recompute forward state
     k = Int(L.C.k/2)
@@ -152,16 +154,13 @@ function backward(ΔY::AbstractArray{T, 4}, Y::AbstractArray{T, 4}, C::AbstractA
     ΔT = copy(ΔY1)
     ΔS = ΔY1 .* X1
     if L.logdet
-        set_grad ? (ΔS -= glow_logdet_backward(S)) : (ΔS_ = glow_logdet_backward(S))
+        ΔS -= glow_logdet_backward(S)
     end
+
     ΔX1 = ΔY1 .* S
     if set_grad
         ΔX2_C = L.RB.backward(cat(L.activation.backward(ΔS, S), ΔT; dims=3), X2_C)
         ΔX2, ΔC  = tensor_split(ΔX2_C)
-        ΔX2 += ΔY2
-    else
-        ΔX2, Δθrb = L.RB.backward(cat(L.activation.backward(ΔS, S), ΔT; dims=3), X2; set_grad=set_grad)
-        _, ∇logdet = L.RB.backward(cat(L.activation.backward(ΔS_, S), 0f0.*ΔT; dims=3), X2; set_grad=set_grad)
         ΔX2 += ΔY2
     end
     #print(size(ΔX2))
@@ -170,16 +169,10 @@ function backward(ΔY::AbstractArray{T, 4}, Y::AbstractArray{T, 4}, C::AbstractA
     if set_grad
         #ΔX = L.C.inverse((ΔX_, tensor_cat(X1, X2)))[1]
         ΔX = L.C.inverse((ΔX_, tensor_cat(X2, X1)))[1]
-    else
-        #ΔX, Δθc = L.C.inverse((ΔX_, tensor_cat(X1, X2)); set_grad=set_grad)[1:2]
-        ΔX, Δθc = L.C.inverse((ΔX_, tensor_cat(X2, X1)); set_grad=set_grad)[1:2]
-        Δθ = cat(Δθc, Δθrb; dims=1)
     end
 
     if set_grad
         return ΔX, X, ΔC
-    else
-        L.logdet ? (return ΔX, Δθ, X, cat(0*Δθ[1:3], ∇logdet; dims=1)) : (return ΔX, Δθ, X)
     end
 end
 
