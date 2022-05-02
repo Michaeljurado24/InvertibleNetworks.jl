@@ -2,6 +2,7 @@
 # Includes 1x1 convolution and residual block
 # Author: Philipp Witte, pwitte3@gatech.edu
 # Date: February 2020
+using Flux
 export NetworkGlowCond
 
 """
@@ -77,7 +78,9 @@ function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scale
     AN = Array{ActNorm}(undef, L, K)    # activation normalization
     CL = Array{CouplingLayerGlowCond}(undef, L, K)  # coupling layers w/ 1x1 convolution and residual block
     CP = Array{Flux.Conv}(undef, L, K) # conditioning pyramid
-    c_in = outdims(conditioning_network, (100, 100, 1, 1))[2]
+
+
+    c_in = size(conditioning_network(zeros((32, 32, 1, 1))))[3]
     if split_scales
         Z_dims = fill!(Array{Array}(undef, L-1), [1,1]) #fill in with dummy values so that |> gpu accepts it   # save dimensions for inverse/backward pass
         channel_factor = 4
@@ -88,9 +91,11 @@ function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scale
 
     for i=1:L
         n_in *= channel_factor # squeeze if split_scales is turned on
+        c_in *= channel_factor
         for j=1:K
             AN[i, j] = ActNorm(n_in; logdet=true)
-            CP[i, j] = Flux.Conv((3, 3), c_in => Int64(n_in/2))
+            CP[i, j] = Flux.Conv((3, 3), c_in => Int64(n_in/2), pad= Flux.SamePad(),relu)
+            c_in = Int64(n_in/2)
             CL[i, j] = CouplingLayerGlowCond(n_in, n_hidden, Int(n_in/2); k1=k1, k2=k2, p1=p1, p2=p2, s1=s1, s2=s2, logdet=true, activation=activation, ndims=ndims)
         end
         (i < L && split_scales) && (n_in = Int64(n_in/2)) # split
@@ -103,40 +108,49 @@ end
 NetworkGlow3D(args; kw...) = NetworkGlow(args...; kw..., ndims=3)
 
 # Forward pass and compute logdet
-function forward(X::AbstractArray{T, N}, G::NetworkGlow) where {T, N}
+function forward(X::AbstractArray{T, N}, C::AbstractArray{T, N}, G::NetworkGlowCond) where {T, N}
+    L, K = size(G.AN)
+    Feature_pyramid = Array{Array{Float64}}(undef, L, K)
+
+    C = G.conditioning_network(C)
     G.split_scales && (Z_save = array_of_array(X, G.L-1))
-    println(size(X));
     logdet = 0
     for i=1:G.L
-        println(size(X));          
-        (G.split_scales) && (X = G.squeezer.forward(X))
-        println(size(X));          
+        if G.split_scales
+            X = G.squeezer.forward(X)
+            C =  G.squeezer.forward(C)
+        end         
+
+        # (G.split_scales) && (X = G.squeezer.forward(X))    
         for j=1:G.K  
 
             X, logdet1 = G.AN[i, j].forward(X)
-            X, logdet2 = G.CL[i, j].forward(X)
+            C = G.CP[i, j](C)
+            Feature_pyramid[i,j] = C
+            X, logdet2 = G.CL[i, j].forward(X,C)
             logdet += (logdet1 + logdet2)
         end
+
         if G.split_scales && i < G.L    # don't split after last iteration
+            C = C[:, :, 1:Int64(size(C)[3]/2), :]
             X, Z = tensor_split(X)
             Z_save[i] = Z
             G.Z_dims[i] = collect(size(Z))
         end
-        println("----------------")
     end
     G.split_scales && (X = cat_states(Z_save, X))
-    return X, logdet
+    return X, Feature_pyramid, logdet
 end
 
 # Inverse pass 
-function inverse(X::AbstractArray{T, N}, G::NetworkGlow) where {T, N}
+function inverse(X::AbstractArray{T, N}, Feature_Pyramid::AbstractArray{AbstractArray}, G::NetworkGlowCond) where {T, N}
     G.split_scales && ((Z_save, X) = split_states(X, G.Z_dims))
     for i=G.L:-1:1
         if G.split_scales && i < G.L
             X = tensor_cat(X, Z_save[i])
         end
         for j=G.K:-1:1
-            X = G.CL[i, j].inverse(X)
+            X = G.CL[i, j].inverse(X, Feature_Pyramid[i, j])
             X = G.AN[i, j].inverse(X)
         end
 
@@ -147,17 +161,15 @@ end
 
 # Backward pass and compute gradients
 function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, G::NetworkGlow; set_grad::Bool=true) where {T, N}
-    
+    if ~set_grad
+        throw(error())
+    end
     # Split data and gradients
     if G.split_scales
         ΔZ_save, ΔX = split_states(ΔX, G.Z_dims)
         Z_save, X = split_states(X, G.Z_dims)
     end
 
-    if ~set_grad
-        Δθ = Array{Parameter, 1}(undef, 10*G.L*G.K)
-        ∇logdet = Array{Parameter, 1}(undef, 10*G.L*G.K)
-    end
     blkidx = 10*G.L*G.K
     for i=G.L:-1:1
         if G.split_scales && i < G.L
@@ -244,7 +256,7 @@ function clear_grad!(G::NetworkGlow)
 end
 
 # Get parameters
-function get_params(G::NetworkGlow)
+function get_params(G::NetworkGlowCond)
     L, K = size(G.AN)
     p = Array{Parameter, 1}(undef, 0)
     for i=1:L
