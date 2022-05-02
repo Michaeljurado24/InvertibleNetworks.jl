@@ -205,14 +205,15 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, C, Feature_P
         end
     end
     # Take Gradient with resepct to the feature pyramid input
-    input_params = params(Feature_Pyramid[L, K])
-    gs = Flux.gradient(input_params) do 
-        sum(G.CP[L, K](Feature_Pyramid[L, K]) .* gradient_feature_pyramid[L, K])
-    end
-     # take gradient with respect to feature pyramid input
     input_params = params(Feature_Pyramid[L, K-1])
     gs = Flux.gradient(input_params) do 
-        sum(G.CP[L, K-1](Feature_Pyramid[L, K-1]) .* gradient_feature_pyramid[L, K-1] .* gs)
+        sum(G.CP[L, K](Feature_Pyramid[L, K-1]) .* gradient_feature_pyramid[L, K])
+    end
+
+     # take gradient with respect to feature pyramid input
+    input_params = params(Feature_Pyramid[L, K-2])
+    gs = Flux.gradient(input_params) do 
+        sum(G.CP[L, K-1](Feature_Pyramid[L, K-2]) .* gradient_feature_pyramid[L, K-1] .* gs)
     end
 
     set_grad ? (return ΔX, X) : (return ΔX, Δθ, X, ∇logdet)
