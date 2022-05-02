@@ -67,3 +67,4 @@ G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=tru
 out, feature_pyramid, logdet = G.forward(X_test[:, :, :, 1:4], incomplete_data[:, :, :, 1:4])
 isapprox(X_test[:, :, :, 1:4], G.inverse(out, feature_pyramid), atol =.0001)
 
+ΔX, X = G.backward(out, out, incomplete_data[:, :, :, 1:4], feature_pyramid)

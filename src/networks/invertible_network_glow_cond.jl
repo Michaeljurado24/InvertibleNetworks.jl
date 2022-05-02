@@ -162,10 +162,14 @@ function inverse(X::AbstractArray{T, N}, Feature_Pyramid, G::NetworkGlowCond) wh
 end
 
 # Backward pass and compute gradients
-function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, G::NetworkGlow; set_grad::Bool=true) where {T, N}
+function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, C, Feature_Pyramid,  G::NetworkGlowCond; set_grad::Bool=true) where {T, N}
     if ~set_grad
         throw(error())
     end
+
+    L, K = size(G.AN)
+    gradient_feature_pyramid = Array{Array{Float32}}(undef, L,K) # create a list to hold the gradients of the feature pyramid outputs coming from the residual blocks
+
     # Split data and gradients
     if G.split_scales
         ΔZ_save, ΔX = split_states(ΔX, G.Z_dims)
@@ -180,22 +184,32 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, G::NetworkGl
         end
         for j=G.K:-1:1
             if set_grad
-                ΔX, X = G.CL[i, j].backward(ΔX, X)
+                C_ = Feature_Pyramid[i, j]
+                ΔX, X, ΔC = G.CL[i, j].backward(ΔX, X, C_)
+                gradient_feature_pyramid[i, j] = ΔC
                 ΔX, X = G.AN[i, j].backward(ΔX, X)
-            else
-                ΔX, Δθcl_ij, X, ∇logdetcl_ij = G.CL[i, j].backward(ΔX, X; set_grad=set_grad)
-                ΔX, Δθan_ij, X, ∇logdetan_ij = G.AN[i, j].backward(ΔX, X; set_grad=set_grad)
-                Δθ[blkidx-9:blkidx] = cat(Δθan_ij, Δθcl_ij; dims=1)
-                ∇logdet[blkidx-9:blkidx] = cat(∇logdetan_ij, ∇logdetcl_ij; dims=1)
             end
             blkidx -= 10
         end
 
         if G.split_scales 
             X = G.squeezer.inverse(X)
+
+            # Double the feature map size of the gradient since in the forward pass we are removing channels
+            cond_feature_size = size(gradient_feature_pyramid[i, 1])
+            new_gradient = zeros(cond_feature_size[1], cond_feature_size[2], cond_feature_size[3] *2, cond_feature_size[4])
+            new_gradient[:, :, 1:cond_feature_size[3], :] .= gradient_feature_pyramid[i, 1]
+            gradient_feature_pyramid[i, 1] = new_gradient
+
           ΔX = G.squeezer.inverse(ΔX)
         end
     end
+
+    input_params = params(Feature_Pyramid[L, K])
+    gs = Flux.gradient(input_params) do 
+        sum(G.CP[L, K](Feature_Pyramid[L, K]) .* gradient_feature_pyramid[L, K])
+    end
+
     set_grad ? (return ΔX, X) : (return ΔX, Δθ, X, ∇logdet)
 end
 
