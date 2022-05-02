@@ -63,7 +63,7 @@ K = 6
 n_hidden = 64
 low = 0.5f0
 
-G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0)) |> gpu
+G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0))
 out, feature_pyramid, logdet = G.forward(X_test[:, :, :, 1:4], incomplete_data[:, :, :, 1:4])
-G.inverse(out, feature_pyramid)
+isapprox(X_test[:, :, :, 1:4], G.inverse(out, feature_pyramid), atol =.0001)
 

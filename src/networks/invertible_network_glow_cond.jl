@@ -110,9 +110,10 @@ NetworkGlow3D(args; kw...) = NetworkGlow(args...; kw..., ndims=3)
 # Forward pass and compute logdet
 function forward(X::AbstractArray{T, N}, C::AbstractArray{T, N}, G::NetworkGlowCond) where {T, N}
     L, K = size(G.AN)
-    Feature_pyramid = Array{Array{Float64}}(undef, L, K)
+    Feature_pyramid = Array{Array{Float32}}(undef, L, K)
 
     C = G.conditioning_network(C)
+    println(typeof(C))
     G.split_scales && (Z_save = array_of_array(X, G.L-1))
     logdet = 0
     for i=1:G.L
@@ -143,13 +144,14 @@ function forward(X::AbstractArray{T, N}, C::AbstractArray{T, N}, G::NetworkGlowC
 end
 
 # Inverse pass 
-function inverse(X::AbstractArray{T, N}, Feature_Pyramid::AbstractArray{AbstractArray}, G::NetworkGlowCond) where {T, N}
+function inverse(X::AbstractArray{T, N}, Feature_Pyramid, G::NetworkGlowCond) where {T, N}
     G.split_scales && ((Z_save, X) = split_states(X, G.Z_dims))
     for i=G.L:-1:1
         if G.split_scales && i < G.L
             X = tensor_cat(X, Z_save[i])
         end
         for j=G.K:-1:1
+
             X = G.CL[i, j].inverse(X, Feature_Pyramid[i, j])
             X = G.AN[i, j].inverse(X)
         end
