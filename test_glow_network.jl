@@ -4,7 +4,9 @@ using BSON: @load
 using MLDatasets
 using ImageView
 using Revise
+using Xsum
 using InvertibleNetworks
+using LinearAlgebra
 # load in test data
 test_x, test_y = MNIST.testdata()
 num_digit = 1
@@ -57,21 +59,57 @@ out = model(incomplete_data)
 
 
 feature_extractor_model = model[1:3]
+#feature_extractor_model = Chain()
 
 L = 2
 K = 6
 n_hidden = 64
 low = 0.5f0
+batch_size = 1
 
+
+x_batch = X_test[:, :, :, 1:batch_size]
+c_batch = incomplete_data[:, :, :, 1:batch_size]
 G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0))
-out, feature_pyramid, cond_network_inputs, logdet = G.forward(X_test[:, :, :, 1:4], incomplete_data[:, :, :, 1:4])
-print("nothing")
-# isapprox(X_test[:, :, :, 1:4], G.inverse(out, feature_pyramid), atol =.0001)
+Zx, feature_pyramid, cond_network_inputs, logdet = G.forward(x_batch, c_batch)
 
-<<<<<<< HEAD
-ΔX, X = G.backward(out, out, incomplete_data[:, :, :, 1:4], feature_pyramid, cond_network_inputs)
-=======
-ΔX, X = G.backward(out, out, incomplete_data[:, :, :, 1:4], feature_pyramid)
+X_reverse = G.inverse(Zx, feature_pyramid)
+println("Testing to make sure that inverse functions")
+println(isapprox(X_reverse, x_batch, atol=1e-3))
 
+loss = xsum(Zx .* Zx)/ batch_size
+ΔY = 2* Zx/batch_size
+println("Testing that backward function is correct as well")
+Δ = 1e-3
+ΔX, X, ΔC = G.backward(ΔY, Zx, c_batch, feature_pyramid, cond_network_inputs)
 print("done")
->>>>>>> 5c48411cd9841916d67fc10b2afd879cf7ca6128
+for x =1:size(c_batch)[1]
+    for y =1:size(c_batch)[2]
+        for z = 1:size(c_batch)[3]
+            c_batch_copy = deepcopy(c_batch)
+            c_batch_copy[x,y,z,:] += ones(Float32, batch_size) .*Δ 
+            Zx_new  = G.forward(x_batch, c_batch_copy)[1]
+            L_2 = xsum(Zx_new .* Zx_new) / batch_size
+
+            c_batch_copy = deepcopy(c_batch)
+            c_batch_copy[x,y,z,:] -= ones(Float32, batch_size) .*Δ 
+            Zx_new  = G.forward(x_batch, c_batch_copy)[1]
+            L_3 = xsum(Zx_new .* Zx_new) / batch_size
+
+            lin_deriv = (L_2 - L_3) / (2 * Δ)
+            print(size(lin_deriv))
+            ref_value = xsum(ΔC[x,y,z,:])
+
+            if abs(ref_value) > .1
+
+                ref_value = xsum(ΔC[x,y,z,:])
+                println(lin_deriv)
+                println(ref_value)
+                println("-----------")                
+                if !isapprox(lin_deriv, ref_value, atol=1)
+                    throw(error())
+                end
+            end
+        end
+    end
+end

@@ -4,7 +4,6 @@
 # Date: February 2020
 using Flux
 export NetworkGlowCond
-
 """
     G = NetworkGlow(n_in, n_hidden, L, K; k1=3, k2=1, p1=1, p2=0, s1=1, s2=1)
 
@@ -80,7 +79,7 @@ function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scale
     CP = Array{Flux.Conv}(undef, L, K) # conditioning pyramid
 
 
-    c_in = size(conditioning_network(zeros((32, 32, 1, 1))))[3]
+    c_in = size(conditioning_network(fill(Float32(0),(32, 32, 1, 1))))[3]
     if split_scales
         Z_dims = fill!(Array{Array}(undef, L-1), [1,1]) #fill in with dummy values so that |> gpu accepts it   # save dimensions for inverse/backward pass
         channel_factor = 4
@@ -105,7 +104,7 @@ function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scale
     return NetworkGlowCond(AN, CL, CP, Z_dims, L, K, conditioning_network, squeezer, split_scales)
 end
 
-NetworkGlow3D(args; kw...) = NetworkGlow(args...; kw..., ndims=3)
+NetworkGlow3D(arΔC; kw...) = NetworkGlow(arΔC...; kw..., ndims=3)
 
 # Forward pass and compute logdet
 function forward(X::AbstractArray{T, N}, C::AbstractArray{T, N}, G::NetworkGlowCond) where {T, N}
@@ -114,10 +113,6 @@ function forward(X::AbstractArray{T, N}, C::AbstractArray{T, N}, G::NetworkGlowC
     cond_network_inputs = Array{Array{Float32}}(undef, L,K) # create a list to hold the innputs to the conditional network
 
     C = G.conditioning_network(C)
-<<<<<<< HEAD
-=======
-    # println(typeof(C))
->>>>>>> 5c48411cd9841916d67fc10b2afd879cf7ca6128
     G.split_scales && (Z_save = array_of_array(X, G.L-1))
     logdet = 0
     for i=1:G.L
@@ -198,39 +193,31 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, C, feature_p
 
         if G.split_scales 
             X = G.squeezer.inverse(X)
-            # gradient_feature_pyramid[i, 1] = G.squeezer.inverse(gradient_feature_pyramid[i, 1])
-            # # Double the feature map size of the gradient since in the forward pass we are removing channels
-            # cond_feature_size = size(gradient_feature_pyramid[i, 1])
-            # #println("cond feature size", cond_feature_size)
-            # new_gradient = zeros(cond_feature_size[1], cond_feature_size[2], cond_feature_size[3] *2, cond_feature_size[4])
-            # new_gradient[:, :, 1:cond_feature_size[3], :] .= gradient_feature_pyramid[i, 1]
-            # gradient_feature_pyramid[i, 1] = new_gradient
-
           ΔX = G.squeezer.inverse(ΔX)
         end
     end
-<<<<<<< HEAD
 
-    # input_params = params(feature_pyramid[L, K-1])
-    # gs = Flux.gradient(input_params) do 
-    #     sum(G.CP[L, K](feature_pyramid[L, K-1]) .* gradient_feature_pyramid[L, K])
-    # end
 
-    gs = ones(size(cond_network_inputs[L, K]))
     for i=G.L:-1:1
-        for j=G.K:-1:1
-            f(x) = sum(G.CP[i, j](x) .* gradient_feature_pyramid[i, j])
-            gs = Flux.gradient(f, cond_network_inputs[i, j])[1]
+    
+        for j=G.K:-1:1  # wrong order
+            if (j == K) && (i == L)
+                ΔC = zeros(Float32, size(cond_network_inputs[L, K]))
+
+            elseif size(ΔC) != size(gradient_feature_pyramid[i, j])
+                ΔC_size = size(ΔC)
+                result = fill(Float32(0), (ΔC_size[1], ΔC_size[2], ΔC_size[3]*2, ΔC_size[4]))
+                result[:, :, 1: ΔC_size[3], :] .= ΔC 
+                ΔC  = G.squeezer.inverse(result)
+            end
+            f(x) = sum(G.CP[i, j](x) .*  (gradient_feature_pyramid[i, j] .+ ΔC))
+            ΔC = Flux.gradient(f, cond_network_inputs[i, j])[1]
         end
     end
-=======
-    # Take Gradient with resepct to the feature pyramid input
-    f(x) = sum(G.CP[L, K](x) .* gradient_feature_pyramid[L, K])
-    gs = Flux.gradient(f, Feature_Pyramid[L, K-1])[1]
->>>>>>> 5c48411cd9841916d67fc10b2afd879cf7ca6128
-
-    print(size(gs))
-    set_grad ? (return ΔX, X) : (return ΔX, Δθ, X, ∇logdet)
+    ΔC = G.squeezer.inverse(ΔC)
+    g(x) = sum(G.conditioning_network(x) .* ΔC  )
+    ΔC = Flux.gradient(g, C)[1]
+    set_grad ? (return ΔX, X, ΔC) : (return ΔX, Δθ, X, ∇logdet)
 end
 
 
