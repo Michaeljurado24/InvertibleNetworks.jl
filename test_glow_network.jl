@@ -68,4 +68,10 @@ out, feature_pyramid, cond_network_inputs, logdet = G.forward(X_test[:, :, :, 1:
 print("nothing")
 # isapprox(X_test[:, :, :, 1:4], G.inverse(out, feature_pyramid), atol =.0001)
 
+<<<<<<< HEAD
 ΔX, X = G.backward(out, out, incomplete_data[:, :, :, 1:4], feature_pyramid, cond_network_inputs)
+=======
+ΔX, X = G.backward(out, out, incomplete_data[:, :, :, 1:4], feature_pyramid)
+
+print("done")
+>>>>>>> 5c48411cd9841916d67fc10b2afd879cf7ca6128

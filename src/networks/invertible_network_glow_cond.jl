@@ -114,6 +114,10 @@ function forward(X::AbstractArray{T, N}, C::AbstractArray{T, N}, G::NetworkGlowC
     cond_network_inputs = Array{Array{Float32}}(undef, L,K) # create a list to hold the innputs to the conditional network
 
     C = G.conditioning_network(C)
+<<<<<<< HEAD
+=======
+    # println(typeof(C))
+>>>>>>> 5c48411cd9841916d67fc10b2afd879cf7ca6128
     G.split_scales && (Z_save = array_of_array(X, G.L-1))
     logdet = 0
     for i=1:G.L
@@ -205,6 +209,7 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, C, feature_p
           ΔX = G.squeezer.inverse(ΔX)
         end
     end
+<<<<<<< HEAD
 
     # input_params = params(feature_pyramid[L, K-1])
     # gs = Flux.gradient(input_params) do 
@@ -218,6 +223,11 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, C, feature_p
             gs = Flux.gradient(f, cond_network_inputs[i, j])[1]
         end
     end
+=======
+    # Take Gradient with resepct to the feature pyramid input
+    f(x) = sum(G.CP[L, K](x) .* gradient_feature_pyramid[L, K])
+    gs = Flux.gradient(f, Feature_Pyramid[L, K-1])[1]
+>>>>>>> 5c48411cd9841916d67fc10b2afd879cf7ca6128
 
     print(size(gs))
     set_grad ? (return ΔX, X) : (return ΔX, Δθ, X, ∇logdet)
@@ -271,7 +281,7 @@ adjointJacobian(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, G::NetworkGlow
 ## Other utils
 
 # Clear gradients
-function clear_grad!(G::NetworkGlow)
+function clear_grad!(G::NetworkGlowCond)
     L, K = size(G.AN)
     for i=1:L
         for j=1:K
