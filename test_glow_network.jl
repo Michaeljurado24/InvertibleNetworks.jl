@@ -41,7 +41,36 @@ function random_rectangle_draw(x_batch)
         start_y = int(max(1, y_coor - max_width_mask))
         end_y = int(min(ny, y_coor + max_width_mask))
 
-        # ImageView.imshow(x_batch[:, :, : , b])
+        # ImageView.imshow(x_batch[:,print("done")
+# for x =1:size(c_batch)[1]
+#     for y =1:size(c_batch)[2]
+#         for z = 1:size(c_batch)[3]
+#             c_batch_copy = deepcopy(c_batch)
+#             c_batch_copy[x,y,z,:] += ones(Float32, batch_size) .*Δ 
+#             Zx_new  = G.forward(x_batch, c_batch_copy)[1]
+#             L_2 = xsum(Zx_new .* Zx_new) / batch_size
+
+#             c_batch_copy = deepcopy(c_batch)
+#             c_batch_copy[x,y,z,:] -= ones(Float32, batch_size) .*Δ 
+#             Zx_new  = G.forward(x_batch, c_batch_copy)[1]
+#             L_3 = xsum(Zx_new .* Zx_new) / batch_size
+
+#             lin_deriv = (L_2 - L_3) / (2 * Δ)
+#             ref_value = xsum(ΔC[x,y,z,:])
+
+#             if abs(ref_value) > .5
+
+#                 ref_value = xsum(ΔC[x,y,z,:])
+#                 println(lin_deriv)
+#                 println(ref_value)
+#                 println("-----------")                
+#                 if !isapprox(lin_deriv, ref_value, atol=1)
+#                     throw(error())
+#                 end
+#             end
+#         end
+#     end
+# end :, : , b])
         x_batch[start_x: end_x, start_y: end_y, : , b] -= x_batch[start_x: end_x, start_y:end_y, : , b]
         # ImageView.imshow(x_batch[:, :, : , b])
     end
@@ -58,7 +87,7 @@ out = model(incomplete_data)
 
 
 
-feature_extractor_model = model[1:3]
+feature_extractor_model = FluxBlock(model[1:3])
 #feature_extractor_model = Chain()
 
 L = 2
@@ -80,9 +109,10 @@ println(isapprox(X_reverse, x_batch, atol=1e-3))
 loss = xsum(Zx .* Zx)/ batch_size
 ΔY = 2* Zx/batch_size
 println("Testing that backward function is correct as well")
-Δ = 1e-3
+Δ = 5e-4
 ΔX, X, ΔC = G.backward(ΔY, Zx, c_batch, feature_pyramid, cond_network_inputs)
-print("done")
+clear_grad!(G)
+params = get_params(G)
 for x =1:size(c_batch)[1]
     for y =1:size(c_batch)[2]
         for z = 1:size(c_batch)[3]
@@ -97,10 +127,9 @@ for x =1:size(c_batch)[1]
             L_3 = xsum(Zx_new .* Zx_new) / batch_size
 
             lin_deriv = (L_2 - L_3) / (2 * Δ)
-            print(size(lin_deriv))
             ref_value = xsum(ΔC[x,y,z,:])
 
-            if abs(ref_value) > .1
+            if abs(ref_value) > .5
 
                 ref_value = xsum(ΔC[x,y,z,:])
                 println(lin_deriv)

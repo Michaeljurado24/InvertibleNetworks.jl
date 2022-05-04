@@ -61,11 +61,11 @@ export NetworkGlowCond
 struct NetworkGlowCond <: InvertibleNetwork
     AN::AbstractArray{ActNorm, 2}
     CL::AbstractArray{CouplingLayerGlowCond, 2}
-    CP::AbstractArray{Flux.Conv, 2}
+    CP::AbstractArray{FluxBlock, 2}
     Z_dims::Union{Array{Array, 1}, Nothing}
     L::Int64
     K::Int64
-    conditioning_network::Chain
+    conditioning_network::FluxBlock
     squeezer::Squeezer
     split_scales::Bool
 end
@@ -76,10 +76,10 @@ end
 function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scales=false, k1=3, k2=1, p1=1, p2=0, s1=1, s2=1, ndims=2, squeezer::Squeezer=ShuffleLayer(), activation::ActivationFunction=SigmoidLayer())
     AN = Array{ActNorm}(undef, L, K)    # activation normalization
     CL = Array{CouplingLayerGlowCond}(undef, L, K)  # coupling layers w/ 1x1 convolution and residual block
-    CP = Array{Flux.Conv}(undef, L, K) # conditioning pyramid
+    CP = Array{FluxBlock}(undef, L, K) # conditioning pyramid
 
-
-    c_in = size(conditioning_network(fill(Float32(0),(32, 32, 1, 1))))[3]
+    
+    c_in = size(conditioning_network.forward(zeros(32, 32, 1, 1)))[3]
     if split_scales
         Z_dims = fill!(Array{Array}(undef, L-1), [1,1]) #fill in with dummy values so that |> gpu accepts it   # save dimensions for inverse/backward pass
         channel_factor = 4
@@ -93,7 +93,7 @@ function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scale
         c_in *= channel_factor
         for j=1:K
             AN[i, j] = ActNorm(n_in; logdet=true)
-            CP[i, j] = Flux.Conv((3, 3), c_in => Int64(n_in/2), pad= Flux.SamePad(),relu)
+            CP[i, j] = FluxBlock(Chain(Flux.Conv((3, 3), c_in => Int64(n_in/2), pad= Flux.SamePad(),relu)))
             c_in = Int64(n_in/2)
             CL[i, j] = CouplingLayerGlowCond(n_in, n_hidden, Int(n_in/2); k1=k1, k2=k2, p1=p1, p2=p2, s1=s1, s2=s2, logdet=true, activation=activation, ndims=ndims)
         end
@@ -125,7 +125,7 @@ function forward(X::AbstractArray{T, N}, C::AbstractArray{T, N}, G::NetworkGlowC
         for j=1:G.K  
             X, logdet1 = G.AN[i, j].forward(X)
             cond_network_inputs[i, j] = C
-            C = G.CP[i, j](C)
+            C = G.CP[i, j].forward(C)
             feature_pyramid[i,j] = C
             X, logdet2 = G.CL[i, j].forward(X,C)
             logdet += (logdet1 + logdet2)
@@ -197,26 +197,25 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, C, feature_p
         end
     end
 
-
+    ΔC = zeros(Float32, size(cond_network_inputs[L, K]))
+    # Backward pass of conditioning network
     for i=G.L:-1:1
-    
         for j=G.K:-1:1  # wrong order
-            if (j == K) && (i == L)
-                ΔC = zeros(Float32, size(cond_network_inputs[L, K]))
-
-            elseif size(ΔC) != size(gradient_feature_pyramid[i, j])
+            if size(ΔC) != size(gradient_feature_pyramid[i, j])
                 ΔC_size = size(ΔC)
                 result = fill(Float32(0), (ΔC_size[1], ΔC_size[2], ΔC_size[3]*2, ΔC_size[4]))
                 result[:, :, 1: ΔC_size[3], :] .= ΔC 
                 ΔC  = G.squeezer.inverse(result)
+                println(size(ΔC))
             end
-            f(x) = sum(G.CP[i, j](x) .*  (gradient_feature_pyramid[i, j] .+ ΔC))
-            ΔC = Flux.gradient(f, cond_network_inputs[i, j])[1]
+            println(size(ΔC))
+            ΔC = G.CP[i, j].backward(gradient_feature_pyramid[i, j] .+ ΔC, cond_network_inputs[i, j])  
+            println("Does not reach here")
         end
     end
-    ΔC = G.squeezer.inverse(ΔC)
-    g(x) = sum(G.conditioning_network(x) .* ΔC  )
-    ΔC = Flux.gradient(g, C)[1]
+    #backward pass of feature extractor
+    ΔC = G.squeezer.inverse(ΔC) 
+    ΔC = G.conditioning_network.backward(ΔC, C)
     set_grad ? (return ΔX, X, ΔC) : (return ΔX, Δθ, X, ∇logdet)
 end
 
@@ -270,10 +269,12 @@ adjointJacobian(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, G::NetworkGlow
 # Clear gradients
 function clear_grad!(G::NetworkGlowCond)
     L, K = size(G.AN)
+    clear_grad!(G.conditioning_network)
     for i=1:L
         for j=1:K
             clear_grad!(G.AN[i, j])
             clear_grad!(G.CL[i, j])
+            clear_grad!(G.CP[i, j])
         end
     end
 end
@@ -286,6 +287,7 @@ function get_params(G::NetworkGlowCond)
         for j=1:K
             p = cat(p, get_params(G.AN[i, j]); dims=1)
             p = cat(p, get_params(G.CL[i, j]); dims=1)
+            p = cat(p, get_params(G.CP[i, j]); dims=1)
         end
     end
     return p
