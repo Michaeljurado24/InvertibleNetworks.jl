@@ -5,6 +5,7 @@ using MLDatasets
 using Revise
 using Flux.Optimise: Optimiser, ExpDecay, update!, ADAM
 using Xsum
+using CUDA
 using InvertibleNetworks
 using LinearAlgebra
 using HDF5
@@ -21,6 +22,7 @@ pretrained_model = false
 
 if pretrained_model
     @load "best_cnn.bson" model # run python train_cnn_inpainting.jl before
+    
 else
     model = create_autoencoder_net()
 end
@@ -76,8 +78,7 @@ test_x = test_x[:,:,inds]
 X_test   = Float32.(reshape(test_x, size(test_x)[1], size(test_x)[2], 1, size(test_x)[3]))
 X_test = permutedims(X_test, [2, 1, 3, 4])
 
-X_test_latent  = X_test[:,:,:,:];
-X_test_latent  .+= noiseLev*randn(Float32, size(X_test_latent));
+X_test_latent  = randn(Float32, size(X_test));
 
 y_test = deepcopy(X_test)
 random_rectangle_draw(X_test) # draw a set number of random rectangles on the testing dataset
@@ -97,8 +98,8 @@ L = 2
 K = 6
 n_hidden = 64
 low = 0.5f0
-feature_extractor_model = FluxBlock(model[1:3])
-G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0))
+feature_extractor_model = FluxBlock(model[1:3]) |> gpu
+G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0)) |> gpu
 
 # Params copy for Epoch-adaptive regularization weight
 θ = get_params(G);
@@ -117,16 +118,18 @@ for e=1:nepochs
     total_train_loss = 0
     for b = 1:nbatches # batch loop
         println("batch: ", b)
-        x_batch = X_train[:, :, :, idx_e[:,b]] # obtain training batch 
-        y_batch = deepcopy(x_batch)  # Undamaged ground truth
+        x_batch = X_train[:, :, :, idx_e[:,b]]  # obtain training batch 
+        y_batch = deepcopy(x_batch) # Undamaged ground truth
         random_rectangle_draw(x_batch)  # damage training batch
-
+        x_batch = x_batch |> gpu
+        y_batch = y_batch |> gpu
         Zx, feature_pyramid, cond_network_inputs, logdet = G.forward(y_batch, x_batch) # run forward pass
        
         # observe loss
         loss = norm(Zx)^2 / (N*batch_size)
         total_train_loss += loss  
         G.backward((Zx / batch_size), (Zx), x_batch, feature_pyramid, cond_network_inputs) 
+        GC.gc()
 
         for i =1:length(θ)
             update!(opt, θ[i].data, θ[i].grad)
@@ -137,9 +140,10 @@ for e=1:nepochs
     total_test_loss = 0
     println("starting testing")
     for b = 1:nbatches_test # batch loop
-        x_batch = X_test[:, :, :, idx_e_test[:,b]]  # these are our damaged images
-        x_batch_latent = X_test_latent[:, :, :, idx_e_test[:,b]]  # random noise
-        y_batch = y_test[:, :, :, idx_e_test[:,b]] #
+        x_batch = X_test[:, :, :, idx_e_test[:,b]]  |> gpu # these are our damaged images
+        x_batch_latent = X_test_latent[:, :, :, idx_e_test[:,b]] |> gpu # random noise
+
+        y_batch = y_test[:, :, :, idx_e_test[:,b]] |> gpu #
         _, feature_pyramid, _, _ = G.forward(y_batch, x_batch) # generate the feature pyramid
 
         y_batch_reverse = G.inverse(x_batch_latent[:], feature_pyramid)  # generate a hypothesis
@@ -156,7 +160,7 @@ for e=1:nepochs
                 save_img = save_dir *  "/" * string(i) * "_hypothesis.png"
                 PyPlot.imsave(save_img, clamp.(y_batch_reverse[:, :, 1, i], 0, 1))
             end
-            Params = get_params(G)
+            Params = get_params(G) |> cpu
             save_dict = @strdict Params
             @tagsave(
                 plot_dir * "/" * string(e) * "/weights.jld2",

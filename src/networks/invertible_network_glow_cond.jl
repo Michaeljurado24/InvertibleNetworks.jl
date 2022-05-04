@@ -78,8 +78,7 @@ function NetworkGlowCond(n_in, n_hidden, L, K, condition_extractor_net; split_sc
     CL = Array{CouplingLayerGlowCond}(undef, L, K)  # coupling layers w/ 1x1 convolution and residual block
     CP = Array{FluxBlock}(undef, L, K) # conditioning pyramid
 
-    
-    c_in = size(condition_extractor_net.forward(zeros(32, 32, 1, 1)))[3]
+    c_in = 32 # TODO remove hard coding here
     if split_scales
         Z_dims = fill!(Array{Array}(undef, L-1), [1,1]) #fill in with dummy values so that |> gpu accepts it   # save dimensions for inverse/backward pass
         channel_factor = 4
