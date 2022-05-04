@@ -206,11 +206,8 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, C, feature_p
                 result = fill(Float32(0), (ΔC_size[1], ΔC_size[2], ΔC_size[3]*2, ΔC_size[4]))
                 result[:, :, 1: ΔC_size[3], :] .= ΔC 
                 ΔC  = G.squeezer.inverse(result)
-                println(size(ΔC))
             end
-            println(size(ΔC))
             ΔC = G.CP[i, j].backward(gradient_feature_pyramid[i, j] .+ ΔC, cond_network_inputs[i, j])  
-            println("Does not reach here")
         end
     end
     #backward pass of feature extractor
