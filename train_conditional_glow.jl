@@ -1,6 +1,7 @@
 using Flux
 
 using BSON: @load
+using HDF5
 using MLDatasets
 using Revise
 using Flux.Optimise: Optimiser, ExpDecay, update!, ADAM
@@ -8,7 +9,6 @@ using Xsum
 using CUDA
 using InvertibleNetworks
 using LinearAlgebra
-using HDF5
 using Random
 using PyPlot
 using DrWatson
@@ -18,17 +18,16 @@ include("inpainting_helpers.jl")
 
 # Random seed
 Random.seed!(20)
-pretrained_model = false
+pretrained_model = true
 
 if pretrained_model
     @load "best_cnn.bson" model # run python train_cnn_inpainting.jl before
-    
 else
     model = create_autoencoder_net()
 end
 
 # Plotting dir
-plot_dir = "glow_cond_out"
+plot_dir = "glow_cond_out_test"
 mkdir(plot_dir)
 
 # Training hyperparameters
@@ -104,7 +103,7 @@ G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=tru
 # Params copy for Epoch-adaptive regularization weight
 θ = get_params(G);
 
-opt = ADAMW(lr)
+opt = ADAM(lr)
 
 train_loss_list = Array{Float64}(undef, nepochs)  # contains training loss
 test_loss_list =  Array{Float64}(undef, nepochs)  # contains mse
@@ -160,7 +159,9 @@ for e=1:nepochs
                 save_img = save_dir *  "/" * string(i) * "_hypothesis.png"
                 PyPlot.imsave(save_img, clamp.(y_batch_reverse[:, :, 1, i], 0, 1))
             end
-            Params = get_params(G) |> cpu
+            Params = get_params(G) |> gpu
+            curr_train_loss_list = train_loss_list[1:e]
+            current_test_loss_list = test_loss_list[1:e]
             save_dict = @strdict Params
             @tagsave(
                 plot_dir * "/" * string(e) * "/weights.jld2",
@@ -174,12 +175,12 @@ for e=1:nepochs
     end
     test_loss_list[e] = total_test_loss
 
-    h5open(plot_dir  * "/" * "learning_curves.h5", "w") do file
-        g = create_group(file, "curves") # create a group
-        g["training"] =   train_loss_list[1:e]
-        g["testing"] =   test_loss_list[1:e]
-        attributes(g)["Description"] = "Learning Curves" # an attribute
-    end
+    # h5open(plot_dir  * "/" * "learning_curves.h5", "w") do file
+    #     g = create_group(file, "curves") # create a group
+    #     g["training"] =   train_loss_list[1:e]
+    #     g["testing"] =   test_loss_list[1:e]
+    #     attributes(g)["Description"] = "Learning Curves" # an attribute
+    # end
 
 end
 
