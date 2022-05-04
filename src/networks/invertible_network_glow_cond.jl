@@ -65,7 +65,7 @@ struct NetworkGlowCond <: InvertibleNetwork
     Z_dims::Union{Array{Array, 1}, Nothing}
     L::Int64
     K::Int64
-    conditioning_network::FluxBlock
+    condition_extractor_net::FluxBlock
     squeezer::Squeezer
     split_scales::Bool
 end
@@ -73,13 +73,13 @@ end
 @Flux.functor NetworkGlow
 
 # Constructor
-function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scales=false, k1=3, k2=1, p1=1, p2=0, s1=1, s2=1, ndims=2, squeezer::Squeezer=ShuffleLayer(), activation::ActivationFunction=SigmoidLayer())
+function NetworkGlowCond(n_in, n_hidden, L, K, condition_extractor_net; split_scales=false, k1=3, k2=1, p1=1, p2=0, s1=1, s2=1, ndims=2, squeezer::Squeezer=ShuffleLayer(), activation::ActivationFunction=SigmoidLayer())
     AN = Array{ActNorm}(undef, L, K)    # activation normalization
     CL = Array{CouplingLayerGlowCond}(undef, L, K)  # coupling layers w/ 1x1 convolution and residual block
     CP = Array{FluxBlock}(undef, L, K) # conditioning pyramid
 
     
-    c_in = size(conditioning_network.forward(zeros(32, 32, 1, 1)))[3]
+    c_in = size(condition_extractor_net.forward(zeros(32, 32, 1, 1)))[3]
     if split_scales
         Z_dims = fill!(Array{Array}(undef, L-1), [1,1]) #fill in with dummy values so that |> gpu accepts it   # save dimensions for inverse/backward pass
         channel_factor = 4
@@ -101,7 +101,7 @@ function NetworkGlowCond(n_in, n_hidden, L, K, conditioning_network; split_scale
         c_in = Int64(n_in /2)
     end
 
-    return NetworkGlowCond(AN, CL, CP, Z_dims, L, K, conditioning_network, squeezer, split_scales)
+    return NetworkGlowCond(AN, CL, CP, Z_dims, L, K, condition_extractor_net, squeezer, split_scales)
 end
 
 NetworkGlow3D(arΔC; kw...) = NetworkGlow(arΔC...; kw..., ndims=3)
@@ -112,7 +112,7 @@ function forward(X::AbstractArray{T, N}, C::AbstractArray{T, N}, G::NetworkGlowC
     feature_pyramid = Array{Array{Float32}}(undef, L, K)
     cond_network_inputs = Array{Array{Float32}}(undef, L,K) # create a list to hold the innputs to the conditional network
 
-    C = G.conditioning_network(C)
+    C = G.condition_extractor_net(C)
     G.split_scales && (Z_save = array_of_array(X, G.L-1))
     logdet = 0
     for i=1:G.L
@@ -215,7 +215,7 @@ function backward(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, C, feature_p
     end
     #backward pass of feature extractor
     ΔC = G.squeezer.inverse(ΔC) 
-    ΔC = G.conditioning_network.backward(ΔC, C)
+    ΔC = G.condition_extractor_net.backward(ΔC, C)
     set_grad ? (return ΔX, X, ΔC) : (return ΔX, Δθ, X, ∇logdet)
 end
 
@@ -269,7 +269,7 @@ adjointJacobian(ΔX::AbstractArray{T, N}, X::AbstractArray{T, N}, G::NetworkGlow
 # Clear gradients
 function clear_grad!(G::NetworkGlowCond)
     L, K = size(G.AN)
-    clear_grad!(G.conditioning_network)
+    clear_grad!(G.condition_extractor_net)
     for i=1:L
         for j=1:K
             clear_grad!(G.AN[i, j])
