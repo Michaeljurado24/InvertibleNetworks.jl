@@ -7,6 +7,10 @@ using Revise
 using Xsum
 using InvertibleNetworks
 using LinearAlgebra
+using Random
+include("inpainting_helpers.jl")
+
+
 
 # Random seed
 Random.seed!(20)
@@ -15,8 +19,8 @@ model = create_autoencoder_net()
 
 # Plotting dir
 exp_name = "train-mnist"
-save_dict = @strdict exp_name
-save_path = plotsdir(savename(save_dict; digits=6))
+# save_dict = @strdict exp_name
+#save_path = plotsdir(savename(save_dict; digits=6))
 
 # Training hyperparameters
 nepochs    = 300
@@ -47,6 +51,7 @@ X_train = Float32.(X_train[:,:,:,1:num_samples])
 X_train = permutedims(X_train, [2, 1, 3, 4])
 
 nx, ny, nc, n_samples_train = size(X_train);
+N = nx*ny 
 
 # Split in training/testing
 #use all as training set because there is a separate testing set
@@ -82,6 +87,35 @@ n_hidden = 64
 low = 0.5f0
 feature_extractor_model = FluxBlock(model[1:3])
 G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0))
+
+# Params copy for Epoch-adaptive regularization weight
+θ = get_params(G);
+
+opt = ADAMW(lr)
+
+train_loss_list = Array{Float64}(undef, nepochs)
+test_loss_list =  Array{Float64}(undef, nepochs)
+best_test_loss = typemax(Int)
+
+for e=1:nepochs
+    idx_e = reshape(randperm(ntrain), batch_size, nbatches)
+    total_train_loss = 0
+    for b = 1:nbatches # batch loop
+        
+        x_batch = X_train[:, :, :, idx_e[:,b]]
+        y_batch = deepcopy(x_batch)
+        random_rectangle_draw(x_batch)
+
+        Zx, feature_pyramid, cond_network_inputs, logdet = G.forward(y_batch, x_batch)
+
+        loss = norm(Zx)^2 / (N*batch_size)
+        total_train_loss += loss
+        G.backward((Zx / batch_size), (Zx), x_batch, feature_pyramid, cond_network_inputs) 
+    end
+        
+    break
+end
+
 
 
 
