@@ -130,7 +130,6 @@ for e=1:nepochs
         for i =1:length(θ)
             update!(opt, θ[i].data, θ[i].grad)
         end
-        break
 
     end
 
@@ -162,7 +161,6 @@ for e=1:nepochs
         end
         test_loss = Flux.mse(y_batch_reverse, y_batch)  # observe mse loss 
         total_test_loss += test_loss
-        break
 
     end
     test_loss_list[e] = total_test_loss
