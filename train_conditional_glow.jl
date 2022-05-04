@@ -10,6 +10,7 @@ using LinearAlgebra
 using HDF5
 using Random
 using PyPlot
+using DrWatson
 include("inpainting_helpers.jl")
 
 
@@ -130,7 +131,6 @@ for e=1:nepochs
         for i =1:length(θ)
             update!(opt, θ[i].data, θ[i].grad)
         end
-
     end
 
     train_loss_list[e] = total_train_loss
@@ -156,12 +156,17 @@ for e=1:nepochs
                 save_img = save_dir *  "/" * string(i) * "_hypothesis.png"
                 PyPlot.imsave(save_img, clamp.(y_batch_reverse[:, :, 1, i], 0, 1))
             end
+            Params = get_params(G)
+            save_dict = @strdict Params
+            @tagsave(
+                plot_dir * "/" * string(e) * "/weights.jld2",
+                save_dict,
+                safe = true
+            )
 
-            # TODO still don't know how to save weights
         end
         test_loss = Flux.mse(y_batch_reverse, y_batch)  # observe mse loss 
         total_test_loss += test_loss
-
     end
     test_loss_list[e] = total_test_loss
 
