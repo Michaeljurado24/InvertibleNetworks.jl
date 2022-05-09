@@ -28,17 +28,14 @@ end
 
 function create_autoencoder_net()
     model = Chain(
-        # First convolution, operating upon a 28x28 image
         Conv((3, 3), 1=>16, pad= Flux.SamePad(), relu),
-    
-        # Second convolution, operating upon a 14x14 image
+
         Conv((3, 3), 16=>32, pad= Flux.SamePad(), relu),
-    
-        # Third convolution, operating upon a 7x7 image
-        Conv((3, 3), 32=>32, pad= Flux.SamePad(), relu),
-    
+
+        Conv((3, 3), 32=>32, pad= Flux.SamePad(), relu), # <- condition extractor output layer
+
         Conv((3, 3), 32=>16, pad= Flux.SamePad(), relu),
-        
+
         Conv((3, 3), 16=>1, pad= Flux.SamePad(), sigmoid)
     )
     return model

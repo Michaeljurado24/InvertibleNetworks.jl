@@ -15,25 +15,36 @@ using DrWatson
 include("inpainting_helpers.jl")
 
 
-
 # Random seed
 Random.seed!(20)
 pretrained_model = true
+raw_condition = false
 
-if pretrained_model
+if raw_condition
+    print("No feature extractor model")
+    model = Chain()
+    feature_extractor_model = model
+    c_in = 1
+elseif pretrained_model
+    print("Pretrained feature extractor model")
     @load "best_cnn.bson" model # run python train_cnn_inpainting.jl before
+    feature_extractor_model = FluxBlock(model[1:3]) |> cpu
+    c_in = 32
 else
+    print("Scratch model")
     model = create_autoencoder_net()
+    feature_extractor_model = FluxBlock(model[1:3]) |> cpu
+    c_in = 32``
 end
 
 # Plotting dir
-plot_dir = "glow_cond_out_test"
+plot_dir = "glow_cond_out"
 mkdir(plot_dir)
 
 # Training hyperparameters
-nepochs    = 300
+nepochs    = 500
 batch_size = 16
-lr        = 5f-4
+lr        = 1f-4
 noiseLev   = 0.01f0 # Additive noise
 
 
@@ -83,35 +94,40 @@ y_test = deepcopy(X_test)
 random_rectangle_draw(X_test) # draw a set number of random rectangles on the testing dataset
 hypothesis_to_generate = 5
 
-_, _, _, n_samples_test = size(X_train);
+_, _, _, n_samples_test = size(X_test);
 
 # Split in training/testing
 #use all as training set because there is a separate testing set
 test_fraction = 1
 ntest = Int(floor((n_samples_test*test_fraction)))
-nbatches_test = cld(ntest, batch_size)
-idx_e_test = reshape(randperm(ntest), batch_size, nbatches_test)
+nbatches_test = Int64(floor(ntest / batch_size))
+idx_e_test = reshape(randperm(batch_size * nbatches_test), batch_size, nbatches_test)
 
 # define architecture with params
 L = 2
 K = 6
 n_hidden = 64
 low = 0.5f0
-feature_extractor_model = FluxBlock(model[1:3]) |> gpu
-G = NetworkGlowCond(1, n_hidden, L, K, feature_extractor_model; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0)) |> gpu
+
+G = NetworkGlowCond(1, n_hidden, L, K, c_in, feature_extractor_model; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0)) |> cpu
 
 # Params copy for Epoch-adaptive regularization weight
 θ = get_params(G);
 
-opt = ADAM(lr)
+opt = ADAMW(lr)
 
 train_loss_list = Array{Float64}(undef, nepochs)  # contains training loss
 test_loss_list =  Array{Float64}(undef, nepochs)  # contains mse
 best_test_loss = typemax(Int)
 
 save_weights_every = 5
-save_image_number = 10
+save_image_number = 16
 for e=1:nepochs
+    if e == 12 
+        println("decaying learning rate by 10: ", lr/10)
+        global opt = ADAM(lr/10)
+    end
+
     print("epoch: ", e)
     idx_e = reshape(randperm(ntrain), batch_size, nbatches)
     total_train_loss = 0
@@ -120,8 +136,8 @@ for e=1:nepochs
         x_batch = X_train[:, :, :, idx_e[:,b]]  # obtain training batch 
         y_batch = deepcopy(x_batch) # Undamaged ground truth
         random_rectangle_draw(x_batch)  # damage training batch
-        x_batch = x_batch |> gpu
-        y_batch = y_batch |> gpu
+        x_batch = x_batch |> cpu
+        y_batch = y_batch |> cpu
         Zx, feature_pyramid, cond_network_inputs, logdet = G.forward(y_batch, x_batch) # run forward pass
        
         # observe loss
@@ -139,10 +155,10 @@ for e=1:nepochs
     total_test_loss = 0
     println("starting testing")
     for b = 1:nbatches_test # batch loop
-        x_batch = X_test[:, :, :, idx_e_test[:,b]]  |> gpu # these are our damaged images
-        x_batch_latent = X_test_latent[:, :, :, idx_e_test[:,b]] |> gpu # random noise
+        x_batch = X_test[:, :, :, idx_e_test[:,b]]  |> cpu # these are our damaged images
+        x_batch_latent = X_test_latent[:, :, :, idx_e_test[:,b]] |> cpu # random noise
 
-        y_batch = y_test[:, :, :, idx_e_test[:,b]] |> gpu #
+        y_batch = y_test[:, :, :, idx_e_test[:,b]] |> cpu #
         _, feature_pyramid, _, _ = G.forward(y_batch, x_batch) # generate the feature pyramid
 
         y_batch_reverse = G.inverse(x_batch_latent[:], feature_pyramid)  # generate a hypothesis
@@ -159,29 +175,21 @@ for e=1:nepochs
                 save_img = save_dir *  "/" * string(i) * "_hypothesis.png"
                 PyPlot.imsave(save_img, clamp.(y_batch_reverse[:, :, 1, i], 0, 1))
             end
-            Params = get_params(G) |> gpu
+            
+            Params = get_params(G) |> cpu
             curr_train_loss_list = train_loss_list[1:e]
             current_test_loss_list = test_loss_list[1:e]
-            save_dict = @strdict Params
+            save_dict = @strdict Params lr raw_condition pretrained_model L K n_hidden curr_train_loss_list current_test_loss_list
             @tagsave(
                 plot_dir * "/" * string(e) * "/weights.jld2",
                 save_dict,
                 safe = true
             )
-
         end
         test_loss = Flux.mse(y_batch_reverse, y_batch)  # observe mse loss 
         total_test_loss += test_loss
     end
     test_loss_list[e] = total_test_loss
-
-    # h5open(plot_dir  * "/" * "learning_curves.h5", "w") do file
-    #     g = create_group(file, "curves") # create a group
-    #     g["training"] =   train_loss_list[1:e]
-    #     g["testing"] =   test_loss_list[1:e]
-    #     attributes(g)["Description"] = "Learning Curves" # an attribute
-    # end
-
 end
 
 

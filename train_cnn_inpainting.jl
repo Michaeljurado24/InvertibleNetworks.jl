@@ -14,16 +14,10 @@ using HDF5
 using MLDatasets
 include("inpainting_helpers.jl")
 
-
 # Random seed
 Random.seed!(20)
 
 model = create_autoencoder_net()
-
-# Plotting dir
-exp_name = "train-mnist"
-save_dict = @strdict exp_name
-save_path = plotsdir(savename(save_dict; digits=6))
 
 # Training hyperparameters
 nepochs    = 300

@@ -4,6 +4,7 @@ using Flux
 using Flux.Optimise: Optimiser, ExpDecay, update!, ADAM
 using Xsum
 using InvertibleNetworks
+include("inpainting_helpers.jl")
 
 # load in training data
 train_x, train_y = MNIST.traindata()
@@ -31,10 +32,6 @@ X_test   = Float32.(reshape(test_x, size(test_x)[1], size(test_x)[2], 1, size(te
 X_test = permutedims(X_test, [2, 1, 3, 4])
 
 
-
-
-
-
 k1 = 3; p1 = 1; s1 = 1
 k2 = 1; p2 = 0; s2 = 1
 # (1, n_hidden, L, K; split_scales=true, p2=0, k2=1, activation=SigmoidLayer(low=low,high=1.0f0)) |> gpu
@@ -42,20 +39,18 @@ k2 = 1; p2 = 0; s2 = 1
 n_in = 2
 c_in = 1
 n_hidden = 64
-Δ = 1e-4
+Δ = 5e-4
 
 x_batch = X_test[:, :, :, 1:batch_size]
-c_batch =  repeat(deepcopy(x_batch), inner = (1, 1, c_in, 1)) * 20
-x_batch = repeat(deepcopy(x_batch), inner = (1, 1, n_in, 1))
-
-
+c_batch =  repeat(deepcopy(x_batch), inner = (1, 1, c_in, 1)) * 20    # make the condition just be a copy of the data
+x_batch = repeat(deepcopy(x_batch), inner = (1, 1, n_in, 1))  # duplicate x_data along channel axis so that we have an even number of channels
 
 layer2 = CouplingLayerGlowCond(n_in, n_hidden, c_in; k1=k1, k2=k2, p1=p1, p2=p2, s1=s1, s2=s2, logdet=true)
 
 println("Testing reverse function")
 Zx, _ = layer2.forward(x_batch, c_batch)  # apply forward pass
 x_batch_reverse = layer2.inverse(Zx, c_batch)
-println(isapprox(x_batch_reverse[:],x_batch[:], atol=1e-3))  # use large atol due to scaling input size by 200
+println(isapprox(x_batch_reverse[:],x_batch[:], atol=1e-3))  # use large atol due to scaling input size by 20
 
 print("Testing that the linear gradient approximations are close to the calculated gradient for the conditon")
 Zx, _ = layer2.forward(x_batch, c_batch)  # apply forward pass
@@ -83,11 +78,11 @@ for x =1:size(c_batch)[1]
             lin_deriv = (L_2 - L_3) / (2 * Δ)
             ref_value = xsum(ΔC[x,y,z,:])
 
-            if abs(ref_value) > .1
+            if abs(ref_value) > .2
 
                 ref_value = xsum(ΔC[x,y,z,:])
-                println(lin_deriv)
-                println(ref_value)
+                println("Lin Approximation for ΔC = ", lin_deriv)
+                println("Backwards Calculated ΔC = ", ref_value)
                 println("-----------")                
                 if !isapprox(lin_deriv, ref_value, atol=.5)
                     throw(error())
